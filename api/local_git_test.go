@@ -3,13 +3,15 @@ package api_test
 import (
 	"github.com/rbwinslow/morlock/api"
 
+	"bytes"
+	"fmt"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
-	"bytes"
-	"os"
+	"time"
 )
 
 type cmdMock struct {
@@ -120,11 +122,59 @@ var _ = Describe("Local Git repository", func() {
 
 		It("should successfully open a real git repository", func() {
 			// Given
-			withTemporaryGitRepo(func(repo *temporaryGitRepo) {
+			withTemporaryGitRepo(func(tgr *temporaryGitRepo) {
 				// When
-				_, err := api.OpenLocalGitRepo(repo.path, nil)
+				repo, err := api.OpenLocalGitRepo(tgr.path, nil)
 
 				// Then
+				Expect(err).To(BeNil())
+				Expect(repo.Path).To(Equal(tgr.path))
+			})
+		})
+	})
+
+	Describe("history streaming", func() {
+		It("should stream over all of a file's commits", func() {
+
+			// Given
+			//
+			filePath := "foo.txt"
+			expectedCommitContents := []string{"foo", "bar"}
+			expectedCommitHashes := []api.ShortHash{}
+
+			withTemporaryGitRepo(func(tgr *temporaryGitRepo) {
+				for _, contents := range expectedCommitContents {
+					err := tgr.addFile(filePath, contents)
+					if err != nil {
+						panic(fmt.Sprintf("tempGitRepo.addFile failed: %v\n", err))
+					}
+					hash, err := tgr.commit(fmt.Sprintf("%s commit", contents))
+					if err != nil {
+						panic(fmt.Sprintf("tempGitRepo.commit failed: %v\n", err))
+					}
+					expectedCommitHashes = append(expectedCommitHashes, hash)
+				}
+
+				// When
+				//
+				repo, err := api.OpenLocalGitRepo(tgr.path, nil)
+				if err == nil {
+					historyChannel, err := repo.History(filePath)
+					if err == nil {
+						for commit := range historyChannel {
+							expectedHash := expectedCommitHashes[len(expectedCommitHashes)-1]
+							expectedCommitHashes = expectedCommitHashes[:len(expectedCommitHashes)-1]
+							howLongAgo := time.Since(commit.Date)
+
+							// Then
+							//
+							Expect(howLongAgo < 10*time.Second).To(BeTrue(), "commit was %s ago", howLongAgo)
+							Expect(commit.Hash.Equals(expectedHash)).To(BeTrue(), "actual: %s, expected: %s", commit.Hash.String(), expectedHash.String())
+							Expect(commit.Author).To(ContainSubstring(tgr.userName))
+						}
+					}
+				}
+
 				Expect(err).To(BeNil())
 			})
 		})
