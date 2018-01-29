@@ -22,11 +22,12 @@ var _ = Describe("request handlers", func() {
 		It("should return the history for a file", func() {
 			// Given
 			filename := "foo.txt"
+			contents := [2]string{"bar!", "foo!"}
 			test_util.WithTemporaryGitRepo(func(repo *test_util.TemporaryGitRepo) {
 				repo.MustAddFile(filename, "foo")
-				hash1 := repo.MustCommit("foo!")
+				hash1 := repo.MustCommit(contents[1])
 				repo.MustAddFile(filename, "bar")
-				hash2 := repo.MustCommit("bar!")
+				hash2 := repo.MustCommit(contents[0])
 
 				filepath := path.Join(repo.Path, filename)
 				URL := fmt.Sprintf("http://localhost/history?path=%s", url.QueryEscape(filepath))
@@ -49,6 +50,7 @@ var _ = Describe("request handlers", func() {
 					Hash   string
 					Author string
 					Date   time.Time
+					Desc   string
 				}
 				body, err := ioutil.ReadAll(response.Body)
 				Expect(err).To(BeNil())
@@ -61,6 +63,7 @@ var _ = Describe("request handlers", func() {
 				for i := 0; i < 2; i++ {
 					Expect(result[i].Author).To(ContainSubstring(repo.UserName))
 					Expect(result[i].Date).To(BeTemporally("<", time.Now(), 10 * time.Second))
+					Expect(result[i].Desc).To(Equal(contents[i]))
 				}
 			})
 		})

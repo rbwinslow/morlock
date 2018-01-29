@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path"
 	"regexp"
-	"strings"
 	"time"
 	"encoding/json"
 )
@@ -126,30 +125,46 @@ func (repo *LocalGitRepo) History(path string) (chan Commit, error) {
 		}()
 
 		for scanner.Scan() {
-			text := scanner.Text()
-			for _, line := range strings.Split(text, "\n") {
-				match := reCommit.FindStringSubmatch(line)
+			line := scanner.Text()
+			if len(line) == 0 {
+				continue
+			}
+			match := reCommit.FindStringSubmatch(line)
+			if len(match) == 2 {
+				if commit != nil {
+					out <- *commit
+				}
+				commit = new(Commit)
+				copy(commit.Hash[:], []byte(match[1]))
+			} else {
+				match = reAuthor.FindStringSubmatch(line)
 				if len(match) == 2 {
-					commit = new(Commit)
-					copy(commit.Hash[:], []byte(match[1]))
+					commit.Author = match[1]
 				} else {
-					match = reAuthor.FindStringSubmatch(line)
+					match = reDate.FindStringSubmatch(line)
 					if len(match) == 2 {
-						commit.Author = match[1]
+						commit.Date, err = time.Parse(time.RFC3339, match[1])
+						if err != nil {
+							fmt.Fprintf(os.Stdout, "ERROR: Couldn't parse commit date %s\n", match[1])
+						}
 					} else {
-						match = reDate.FindStringSubmatch(line)
-						if len(match) == 2 {
-							commit.Date, err = time.Parse(time.RFC3339, match[1])
-							if err != nil {
-								fmt.Fprintf(os.Stdout, "ERROR: Couldn't parse commit date %s\n", match[1])
-							}
-							out <- *commit
-							commit = nil
+						if line[:4] == "    " {
+							line = line[4:]
+						}
+						if len(commit.Desc) > 0 {
+							commit.Desc = fmt.Sprintf("%s\n%s", commit.Desc, line)
+						} else {
+							commit.Desc = line
 						}
 					}
 				}
 			}
 		}
+
+		if commit != nil {
+			out <- *commit
+		}
+
 		if err := scanner.Err(); err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR reading git command's stdout: %v\n", err)
 		}
@@ -178,6 +193,7 @@ type Commit struct {
 	Hash
 	Author string
 	Date   time.Time
+	Desc   string
 }
 
 func (c *Commit) forJSON() *commitForJSON {
@@ -185,6 +201,7 @@ func (c *Commit) forJSON() *commitForJSON {
 		Hash: c.Hash.String(),
 		Author: c.Author,
 		Date: c.Date,
+		Desc: c.Desc,
 	}
 }
 
@@ -192,6 +209,7 @@ type commitForJSON struct {
 	Hash string		`json:"hash"`
 	Author string	`json:"author"`
 	Date time.Time	`json:"date"`
+	Desc string		`json:"desc"`
 }
 
 type CommitList []Commit

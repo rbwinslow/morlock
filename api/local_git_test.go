@@ -5,7 +5,6 @@ import (
 	"github.com/rbwinslow/morlock/test_util"
 
 	"bytes"
-	"fmt"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"io"
@@ -180,7 +179,7 @@ var _ = Describe("Local Git repository", func() {
 			test_util.WithTemporaryGitRepo(func(tgr *test_util.TemporaryGitRepo) {
 				for _, contents := range expectedCommitContents {
 					tgr.MustAddFile(filePath, contents)
-					hash := tgr.MustCommit(fmt.Sprintf("%s commit", contents))
+					hash := tgr.MustCommit(contents)
 					expectedCommitHashes = append(expectedCommitHashes, hash)
 				}
 
@@ -190,15 +189,41 @@ var _ = Describe("Local Git repository", func() {
 				if err == nil {
 					historyChannel, err := repo.History(filePath)
 					if err == nil {
+						i := 2
 						for commit := range historyChannel {
-							expectedHash := expectedCommitHashes[len(expectedCommitHashes)-1]
-							expectedCommitHashes = expectedCommitHashes[:len(expectedCommitHashes)-1]
+							i--
 
 							// Then
 							//
 							Expect(commit.Date).To(BeTemporally("<", time.Now(), 10 * time.Second))
-							Expect(commit.Hash.Equals(expectedHash)).To(BeTrue(), "actual: %s, expected: %s", commit.Hash.String(), expectedHash.String())
+							Expect(commit.Hash.Equals(expectedCommitHashes[i])).To(BeTrue(), "actual: %s, expected: %s", commit.Hash.String(), expectedCommitHashes[i].String())
 							Expect(commit.Author).To(ContainSubstring(tgr.UserName))
+							Expect(commit.Desc).To(Equal(expectedCommitContents[i]))
+						}
+					}
+				}
+
+				Expect(err).To(BeNil())
+			})
+		})
+
+		It("should properly format a multi-line description", func() {
+			// Given
+			filePath := "bar.txt"
+			expectedDesc := "First line\n\nHere's a list:\n\n   - one\n   - two"
+			test_util.WithTemporaryGitRepo(func(tgr *test_util.TemporaryGitRepo) {
+				tgr.MustAddFile(filePath, "does not matter")
+				tgr.MustCommit(expectedDesc)
+
+				// When
+				repo, err := api.OpenLocalGitRepo(tgr.Path, nil)
+				if err == nil {
+					historyChannel, err := repo.History(filePath)
+					if err == nil {
+						for commit := range historyChannel {
+
+							// Then
+							Expect(commit.Desc).To(Equal(expectedDesc))
 						}
 					}
 				}
