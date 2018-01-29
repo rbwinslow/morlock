@@ -2,14 +2,17 @@ package api_test
 
 import (
 	"github.com/rbwinslow/morlock/api"
+	"github.com/rbwinslow/morlock/test_util"
 
 	"bytes"
 	"fmt"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"io"
+	"io/ioutil"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 	"time"
 )
@@ -93,7 +96,7 @@ var _ = Describe("Local Git repository", func() {
 			Expect(err.Error()).To(Equal("Git not installed"))
 		})
 
-		It("should return 'No such directory' error when passed a non-existent directory", func() {
+		It("should return 'Not a git repository' error when passed a non-existent directory", func() {
 			// Given
 			noSuchPath := "/there/is/no/such/directory"
 			mockFact := newCommandMockFactory()
@@ -105,7 +108,7 @@ var _ = Describe("Local Git repository", func() {
 			// Then
 			mockFact.assertCommandsWereRun()
 			Expect(err).ToNot(BeNil())
-			Expect(err.Error()).To(ContainSubstring("not a directory"))
+			Expect(strings.ToLower(err.Error())).To(MatchRegexp(`.*not .+ git repository.*`))
 		})
 
 		It("should return \"Not a git repository\" when passed a path to a non-Git-repo directory", func() {
@@ -117,18 +120,50 @@ var _ = Describe("Local Git repository", func() {
 
 			// Then
 			Expect(err).ToNot(BeNil())
-			Expect(strings.ToLower(err.Error())).To(ContainSubstring("not a git repository"))
+			Expect(strings.ToLower(err.Error())).To(MatchRegexp(`.*not .+ git repository.*`))
 		})
 
 		It("should successfully open a real git repository", func() {
 			// Given
-			withTemporaryGitRepo(func(tgr *temporaryGitRepo) {
+			test_util.WithTemporaryGitRepo(func(tgr *test_util.TemporaryGitRepo) {
 				// When
-				repo, err := api.OpenLocalGitRepo(tgr.path, nil)
+				repo, err := api.OpenLocalGitRepo(tgr.Path, nil)
 
 				// Then
 				Expect(err).To(BeNil())
-				Expect(repo.Path).To(Equal(tgr.path))
+				Expect(repo.Path).To(Equal(tgr.Path))
+			})
+		})
+
+		It("should try parent directories until it finds a Git repository", func() {
+			// Given
+			test_util.WithTemporaryGitRepo(func(tgr *test_util.TemporaryGitRepo) {
+				innerPath := path.Join(tgr.Path, "one/two/three")
+				if err := os.MkdirAll(innerPath, 0777); err != nil {
+					panic(err)
+				}
+				wtfinfo, wtferr := os.Stat(path.Join(tgr.Path, "one/two/three"))
+				Expect(wtferr).To(BeNil())
+				Expect(wtfinfo).ToNot(BeNil())
+				Expect(wtfinfo.IsDir()).To(BeTrue())
+				ioutil.WriteFile(path.Join(innerPath, "four.txt"), []byte{64, 64, 64}, 0444)
+
+				// When
+				ptr1, err1 := api.OpenLocalGitRepo(path.Join(tgr.Path, "one/"), nil)
+				ptr2, err2 := api.OpenLocalGitRepo(path.Join(tgr.Path, "one/two/three/"), nil)
+				ptr3, err3 := api.OpenLocalGitRepo(path.Join(tgr.Path, "one/two/three/four.txt"), nil)
+				ptrNope, errNope := api.OpenLocalGitRepo(path.Join(tgr.Path, "does/not/exist"), nil)
+
+				// Then
+				Expect(ptr1).ToNot(BeNil())
+				Expect(err1).To(BeNil())
+				Expect(ptr2).ToNot(BeNil())
+				Expect(err2).To(BeNil())
+				Expect(ptr3).ToNot(BeNil())
+				Expect(err3).To(BeNil())
+				Expect(ptrNope).To(BeNil())
+				Expect(errNope).ToNot(BeNil())
+				Expect(strings.ToLower(errNope.Error())).To(MatchRegexp(`.*not .+ git repository.*`))
 			})
 		})
 	})
@@ -142,35 +177,28 @@ var _ = Describe("Local Git repository", func() {
 			expectedCommitContents := []string{"foo", "bar"}
 			expectedCommitHashes := []api.ShortHash{}
 
-			withTemporaryGitRepo(func(tgr *temporaryGitRepo) {
+			test_util.WithTemporaryGitRepo(func(tgr *test_util.TemporaryGitRepo) {
 				for _, contents := range expectedCommitContents {
-					err := tgr.addFile(filePath, contents)
-					if err != nil {
-						panic(fmt.Sprintf("tempGitRepo.addFile failed: %v\n", err))
-					}
-					hash, err := tgr.commit(fmt.Sprintf("%s commit", contents))
-					if err != nil {
-						panic(fmt.Sprintf("tempGitRepo.commit failed: %v\n", err))
-					}
+					tgr.MustAddFile(filePath, contents)
+					hash := tgr.MustCommit(fmt.Sprintf("%s commit", contents))
 					expectedCommitHashes = append(expectedCommitHashes, hash)
 				}
 
 				// When
 				//
-				repo, err := api.OpenLocalGitRepo(tgr.path, nil)
+				repo, err := api.OpenLocalGitRepo(tgr.Path, nil)
 				if err == nil {
 					historyChannel, err := repo.History(filePath)
 					if err == nil {
 						for commit := range historyChannel {
 							expectedHash := expectedCommitHashes[len(expectedCommitHashes)-1]
 							expectedCommitHashes = expectedCommitHashes[:len(expectedCommitHashes)-1]
-							howLongAgo := time.Since(commit.Date)
 
 							// Then
 							//
-							Expect(howLongAgo < 10*time.Second).To(BeTrue(), "commit was %s ago", howLongAgo)
+							Expect(commit.Date).To(BeTemporally("<", time.Now(), 10 * time.Second))
 							Expect(commit.Hash.Equals(expectedHash)).To(BeTrue(), "actual: %s, expected: %s", commit.Hash.String(), expectedHash.String())
-							Expect(commit.Author).To(ContainSubstring(tgr.userName))
+							Expect(commit.Author).To(ContainSubstring(tgr.UserName))
 						}
 					}
 				}

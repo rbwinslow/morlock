@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html data-ng-app="morlockApp" lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Morlock</title>
+    <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.5.6/angular.min.js"></script>
+    <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.5.6/angular-resource.min.js"></script>
+</head>
+<body data-ng-controller="IndexController">
+    <form>
+        <label for="filepath">Absolute path to a file in a Git repository:</label>
+        <input data-ng-model="filepath" id="filepath" name="filepath" width="500">
+        <div><button data-ng-click="showHistory(filepath)">Show History</button></div>
+    </form>
+    <div>
+        <div data-ng-repeat="commit in history">
+            <table>
+                <tr>
+                    <th>Hash</th><td data-ng-bind="commit.hash"></td>
+                </tr>
+                <tr>
+                    <th>Author</th><td data-ng-bind="commit.author"></td>
+                </tr>
+                <tr>
+                    <th>Date</th><td data-ng-bind="commit.date"></td>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <script lang="javascript">
+        var app = angular.module('morlockApp', ['ngResource']);
+
+        app.controller('IndexController', function IndexController($resource, $scope) {
+            $scope.showHistory = function (filepath) {
+                $scope.History.query({path: filepath}, function (history) {
+                    $scope.history = history;
+                })
+            };
+            $scope.History = $resource('api/history')
+        });
+    </script>
+</body>
+</html>

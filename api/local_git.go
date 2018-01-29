@@ -8,9 +8,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"time"
+	"path"
 	"regexp"
 	"strings"
+	"time"
+	"encoding/json"
 )
 
 // Functions that need to have their use of exec.Command tested should take
@@ -35,6 +37,24 @@ func defaultCommandImpl(stdin io.Reader, stdout, stderr io.Writer, cwd string, c
 	return Cmd
 }
 
+func findClosestRepoDir(p string) (string, bool) {
+	if info, err := os.Stat(p); err == nil && !info.IsDir() {
+		p = path.Dir(p)
+	}
+
+	for len(p) > 0 && p != "/" {
+		if info, err := os.Stat(p); err != nil || !info.IsDir() {
+			break
+		}
+		if info, err := os.Stat(path.Join(p, ".git")); err == nil && info.IsDir() {
+			return p, true
+		}
+		p = path.Dir(p)
+	}
+
+	return p, false
+}
+
 func CookedErrorFromGitExec(stdout, stderr *bytes.Buffer, err error) error {
 	if err != nil {
 		if stderr != nil && stderr.Len() > 0 {
@@ -50,7 +70,7 @@ func CookedErrorFromGitExec(stdout, stderr *bytes.Buffer, err error) error {
 	return nil
 }
 
-func OpenLocalGitRepo(path string, cmdFn CommandFn) (*LocalGitRepo, error) {
+func OpenLocalGitRepo(p string, cmdFn CommandFn) (*LocalGitRepo, error) {
 	if cmdFn == nil {
 		cmdFn = defaultCommandImpl
 	}
@@ -59,20 +79,19 @@ func OpenLocalGitRepo(path string, cmdFn CommandFn) (*LocalGitRepo, error) {
 		return nil, err
 	}
 
-	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
-		return nil, fmt.Errorf("\"%s\" is not a directory", path)
+	gitpath, ok := findClosestRepoDir(p)
+	if !ok {
+		return nil, fmt.Errorf("Could not find git repository at [%s]", p)
 	}
 
 	var stdout, stderr bytes.Buffer
-	cmd := cmdFn(nil, &stdout, &stderr, path, "git", "status")
-	err = cmd.Run()
+	cmd := cmdFn(nil, &stdout, &stderr, gitpath, "git", "status")
 
-	if err != nil {
+	if err := cmd.Run(); err != nil {
 		return nil, CookedErrorFromGitExec(&stdout, &stderr, err)
 	}
 
-	return &LocalGitRepo{Path: path}, nil
+	return &LocalGitRepo{Path: gitpath}, nil
 }
 
 // Use OpenLocalGitRepo to create a LocalGitRepo based on a file system
@@ -144,11 +163,11 @@ func (repo *LocalGitRepo) History(path string) (chan Commit, error) {
 			return
 		}
 
-		<- done
+		<-done
 
 		err = cmd.Wait()
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "Error waiting for command completion", err)
+			fmt.Fprintln(os.Stderr, "Error waiting for command completion:", err)
 		}
 	}()
 
@@ -159,6 +178,30 @@ type Commit struct {
 	Hash
 	Author string
 	Date   time.Time
+}
+
+func (c *Commit) forJSON() *commitForJSON {
+	return &commitForJSON{
+		Hash: c.Hash.String(),
+		Author: c.Author,
+		Date: c.Date,
+	}
+}
+
+type commitForJSON struct {
+	Hash string		`json:"hash"`
+	Author string	`json:"author"`
+	Date time.Time	`json:"date"`
+}
+
+type CommitList []Commit
+
+func (c *CommitList) ToJSON() ([]byte, error) {
+	var facades []commitForJSON
+	for _, commit := range *c {
+		facades = append(facades, *commit.forJSON())
+	}
+	return json.Marshal(facades)
 }
 
 func checkForGit(cmdFn CommandFn) error {

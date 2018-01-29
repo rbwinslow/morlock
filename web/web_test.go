@@ -1,4 +1,4 @@
-package api_test
+package main_test
 
 import (
 	. "github.com/onsi/ginkgo"
@@ -8,5 +8,5 @@ import (
 
 func TestAPI(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Morlock API")
+	RunSpecs(t, "Morlock Web front-end")
 }
