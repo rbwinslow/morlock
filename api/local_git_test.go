@@ -14,6 +14,7 @@ import (
 	"path"
 	"strings"
 	"time"
+	"fmt"
 )
 
 type cmdMock struct {
@@ -187,7 +188,8 @@ var _ = Describe("Local Git repository", func() {
 				//
 				repo, err := api.OpenLocalGitRepo(tgr.Path, nil)
 				if err == nil {
-					historyChannel, err := repo.History(filePath)
+					var historyChannel chan api.Commit
+					historyChannel, err = repo.History(filePath)
 					if err == nil {
 						i := 2
 						for commit := range historyChannel {
@@ -218,12 +220,60 @@ var _ = Describe("Local Git repository", func() {
 				// When
 				repo, err := api.OpenLocalGitRepo(tgr.Path, nil)
 				if err == nil {
-					historyChannel, err := repo.History(filePath)
+					var historyChannel chan api.Commit
+					historyChannel, err = repo.History(filePath)
 					if err == nil {
 						for commit := range historyChannel {
 
 							// Then
 							Expect(commit.Desc).To(Equal(expectedDesc))
+						}
+					}
+				}
+
+				Expect(err).To(BeNil())
+			})
+		})
+	})
+
+	Describe("Timelapse", func() {
+		It("should handle a deleted line", func() {
+			// Given
+			filePath := "numbers.txt"
+			test_util.WithTemporaryGitRepo(func(tgr *test_util.TemporaryGitRepo) {
+				tgr.MustAddFile(filePath, "one\ntwo\nthree")
+				tgr.MustCommit("doesn't matter")
+				tgr.MustAddFile(filePath, "one\nthree")
+				tgr.MustCommit("also doesn't matter")
+
+				// When
+				repo, err := api.OpenLocalGitRepo(tgr.Path, nil)
+				if err == nil {
+					var tl api.Timelapse
+					tl, err = repo.Timelapse(filePath)
+					if err == nil {
+
+						// Then
+						for i, expected := range []struct{
+							disposition api.Disposition
+							text string
+						}{
+							{
+								disposition: api.PRESENT,
+								text: "one",
+							},
+							{
+								disposition: api.DELETED,
+								text: "two",
+							},
+							{
+								disposition: api.PRESENT,
+								text: "three",
+							},
+						}{
+							Expect(tl[i].Disposition).To(Equal(expected.disposition), fmt.Sprintf("iteration %d", i))
+							Expect(len(tl[i].Lines)).To(Equal(1), fmt.Sprintf("iteration %d", i))
+							Expect(tl[i].Lines[0]).To(Equal(expected.text))
 						}
 					}
 				}

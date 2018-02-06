@@ -12,6 +12,15 @@ import (
 	"regexp"
 	"time"
 	"encoding/json"
+	"io/ioutil"
+	"github.com/waigani/diffparser"
+	"strings"
+)
+
+type Disposition int
+const (
+	PRESENT Disposition = iota
+	DELETED
 )
 
 // Functions that need to have their use of exec.Command tested should take
@@ -189,6 +198,66 @@ func (repo *LocalGitRepo) History(path string) (chan Commit, error) {
 	return out, nil
 }
 
+func (repo *LocalGitRepo) Timelapse(p string) (Timelapse, error) {
+	var result Timelapse = Timelapse{}
+
+	contents, err := ioutil.ReadFile(path.Join(repo.Path, p))
+	if err != nil {
+		return nil, err
+	}
+	result = append(result, TimelapseHunk{PRESENT, strings.Split(string(contents), "\n")})
+
+	hist, err := repo.History(p)
+	if err != nil {
+		return nil, err
+	}
+
+	newerCommit := ""
+	for c := range hist {
+		hash := c.Hash.String()
+		if len(newerCommit) == 0 {
+			newerCommit = hash
+			continue
+		}
+
+		cmd := exec.Command("git", "diff", hash, newerCommit, "--", p)
+		cmd.Dir = repo.Path
+		obuf := bytes.Buffer{}
+		ebuf := bytes.Buffer{}
+		cmd.Stdout = &obuf
+		cmd.Stderr = &ebuf
+
+		err = cmd.Run()
+		if err != nil {
+			return nil, err
+		}
+
+		parsed, err := diffparser.Parse(obuf.String())
+		if err != nil {
+			return nil, err
+		}
+
+		if len(parsed.Files) == 0 {
+			fmt.Println("WTF? No files!")
+			continue
+		}
+		for _, hunk := range parsed.Files[0].Hunks {
+			nav, err := newDiffRNA(hunk.OrigRange.Lines, hunk.NewRange.Lines, &result)
+			if err != nil {
+				return nil, err
+			}
+			err = nav.transcribe()
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		newerCommit = hash
+	}
+
+	return result, nil
+}
+
 type Commit struct {
 	Hash
 	Author string
@@ -204,6 +273,26 @@ func (c *Commit) forJSON() *commitForJSON {
 		Desc: c.Desc,
 	}
 }
+
+type TimelapseHunk struct {
+	Disposition
+	Lines []string
+}
+
+func (h TimelapseHunk) String() string {
+	var disp string
+	switch h.Disposition {
+	case DELETED:
+		disp = "DELETED"
+	case PRESENT:
+		disp = "PRESENT"
+	default:
+		disp = fmt.Sprintf("UNEXPECTED DISPOSITION %d", int(h.Disposition))
+	}
+	return fmt.Sprintf("%s: \"%s\"", disp, strings.Join(h.Lines, "\\n"))
+}
+
+type Timelapse []TimelapseHunk
 
 type commitForJSON struct {
 	Hash string		`json:"hash"`
